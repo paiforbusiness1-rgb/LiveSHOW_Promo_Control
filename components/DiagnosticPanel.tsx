@@ -80,17 +80,25 @@ export const DiagnosticPanel: React.FC = () => {
         setSampleDoc({ id: doc.id, ...data });
 
         // 3. Verificar campos requeridos
-        const requiredFields = ['email', 'ticketType', 'status'];
+        const criticalFields = ['email']; // Solo email es realmente crítico
+        const recommendedFields = ['ticketType', 'status']; // Estos tienen valores por defecto
         const optionalFields = ['name', 'firstName', 'lastName', 'qrCodeValue', 'qrCode'];
         const autoFields = ['validationTime', 'validatedBy'];
 
-        const missingRequired: string[] = [];
+        const missingCritical: string[] = [];
+        const missingRecommended: string[] = [];
         const foundOptional: string[] = [];
         const foundAuto: string[] = [];
 
-        requiredFields.forEach(field => {
+        criticalFields.forEach(field => {
           if (!(field in data)) {
-            missingRequired.push(field);
+            missingCritical.push(field);
+          }
+        });
+
+        recommendedFields.forEach(field => {
+          if (!(field in data)) {
+            missingRecommended.push(field);
           }
         });
 
@@ -106,22 +114,45 @@ export const DiagnosticPanel: React.FC = () => {
           }
         });
 
-        // Verificar campos requeridos
-        if (missingRequired.length > 0) {
+        // Verificar campos críticos (sin estos, la app no funciona)
+        if (missingCritical.length > 0) {
           diagnostics.push({
-            check: 'Campos Requeridos',
+            check: 'Campos Críticos',
             status: 'error',
-            message: `❌ Faltan campos: ${missingRequired.join(', ')}`,
+            message: `❌ Faltan campos críticos: ${missingCritical.join(', ')}. La app NO funcionará sin estos.`,
             details: {
-              faltantes: missingRequired,
-              encontrados: requiredFields.filter(f => !missingRequired.includes(f)),
+              faltantes: missingCritical,
+              encontrados: criticalFields.filter(f => !missingCritical.includes(f)),
             },
           });
         } else {
           diagnostics.push({
-            check: 'Campos Requeridos',
+            check: 'Campos Críticos',
             status: 'success',
-            message: `✅ Todos los campos requeridos presentes: ${requiredFields.join(', ')}`,
+            message: `✅ Campo crítico presente: ${criticalFields.join(', ')}`,
+          });
+        }
+
+        // Verificar campos recomendados (tienen valores por defecto)
+        if (missingRecommended.length > 0) {
+          diagnostics.push({
+            check: 'Campos Recomendados',
+            status: 'warning',
+            message: `⚠️ Faltan campos: ${missingRecommended.join(', ')}. La app usará valores por defecto (ticketType: 'GENERAL', status: 'PENDING'). Se agregarán automáticamente al validar.`,
+            details: {
+              faltantes: missingRecommended,
+              valores_por_defecto: {
+                ticketType: 'GENERAL',
+                status: 'PENDING'
+              },
+              nota: 'Estos campos se agregarán automáticamente cuando se valide el primer registro'
+            },
+          });
+        } else {
+          diagnostics.push({
+            check: 'Campos Recomendados',
+            status: 'success',
+            message: `✅ Todos los campos recomendados presentes: ${recommendedFields.join(', ')}`,
           });
         }
 
