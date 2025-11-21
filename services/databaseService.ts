@@ -178,8 +178,18 @@ export const dbService = {
       let docSnap: any;
       
       // Limpiar el código QR (eliminar espacios, convertir a string)
-      const cleanQRCode = String(qrCode).trim();
-      console.log('🔍 [validateRegistration] Buscando código QR:', cleanQRCode);
+      let cleanQRCode = String(qrCode).trim();
+      console.log('🔍 [validateRegistration] Código QR escaneado (primeros 100 chars):', cleanQRCode.substring(0, 100));
+      
+      // Extraer email del contenido del QR si es un texto formateado
+      // El QR de pre-registro contiene: "Email: usuario@email.com"
+      const emailMatch = cleanQRCode.match(/Email:\s*([^\n\r]+)/i);
+      if (emailMatch && emailMatch[1]) {
+        const extractedEmail = emailMatch[1].trim();
+        console.log('📧 [validateRegistration] Email extraído del QR:', extractedEmail);
+        // Usar el email para buscar
+        cleanQRCode = extractedEmail;
+      }
       
       // Intentar buscar por ID del documento primero (si el QR contiene el ID)
       try {
@@ -220,17 +230,30 @@ export const dbService = {
                 // 1. ID del documento
                 // 2. qrCodeValue
                 // 3. qrCode
-                // 4. email (por si el QR contiene el email)
-                // 5. Parte del qrCodeDataUrl
+                // 4. email (MUY IMPORTANTE: el QR contiene el email)
+                // 5. email en minúsculas (comparación case-insensitive)
+                // 6. Parte del qrCodeDataUrl
+                // 7. Contenido completo del QR (por si el documento tiene el texto completo)
+                const docEmail = String(docData.email || '').toLowerCase().trim();
+                const searchValue = cleanQRCode.toLowerCase().trim();
+                
                 if (
                   docId === cleanQRCode ||
                   docData.qrCodeValue === cleanQRCode ||
                   docData.qrCode === cleanQRCode ||
+                  docEmail === searchValue ||
                   docData.email === cleanQRCode ||
-                  (docData.qrCodeDataUrl && String(docData.qrCodeDataUrl).includes(cleanQRCode))
+                  (docData.qrCodeDataUrl && String(docData.qrCodeDataUrl).includes(cleanQRCode)) ||
+                  (docData.qrContent && String(docData.qrContent).includes(cleanQRCode))
                 ) {
                   foundDoc = { ref: docItem.ref, snap: docItem };
-                  console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva');
+                  console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva por:', 
+                    docId === cleanQRCode ? 'ID' :
+                    docData.qrCodeValue === cleanQRCode ? 'qrCodeValue' :
+                    docData.qrCode === cleanQRCode ? 'qrCode' :
+                    docEmail === searchValue || docData.email === cleanQRCode ? 'email' :
+                    'otro campo'
+                  );
                   break;
                 }
               }
