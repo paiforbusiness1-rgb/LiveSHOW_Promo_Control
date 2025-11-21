@@ -177,53 +177,80 @@ export const dbService = {
       let docRef: any;
       let docSnap: any;
       
+      // Limpiar el código QR (eliminar espacios, convertir a string)
+      const cleanQRCode = String(qrCode).trim();
+      console.log('🔍 [validateRegistration] Buscando código QR:', cleanQRCode);
+      
       // Intentar buscar por ID del documento primero (si el QR contiene el ID)
       try {
-        docRef = doc(dbInstance, REGISTRATIONS_COLLECTION, qrCode);
+        docRef = doc(dbInstance, REGISTRATIONS_COLLECTION, cleanQRCode);
         docSnap = await getDoc(docRef);
         
-        if (!docSnap.exists()) {
+        if (docSnap.exists()) {
+          console.log('✅ [validateRegistration] Encontrado por ID del documento');
+        } else {
           // Si no existe por ID, buscar por qrCodeValue
-          const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
+          const q = query(registrationsRef, where('qrCodeValue', '==', cleanQRCode));
           const querySnapshot = await getDocs(q);
           
-          if (querySnapshot.empty) {
-            // Intentar buscar por qrCode (campo alternativo)
-            const q2 = query(registrationsRef, where('qrCode', '==', qrCode));
-            const querySnapshot2 = await getDocs(q2);
-            
-            if (querySnapshot2.empty) {
-              notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
-              return { success: false, message: 'Código QR no encontrado en la base de datos.' };
-            }
-            
-            docRef = querySnapshot2.docs[0].ref;
-            docSnap = querySnapshot2.docs[0];
-          } else {
+          if (!querySnapshot.empty) {
+            console.log('✅ [validateRegistration] Encontrado por qrCodeValue');
             docRef = querySnapshot.docs[0].ref;
             docSnap = querySnapshot.docs[0];
+          } else {
+            // Intentar buscar por qrCode (campo alternativo)
+            const q2 = query(registrationsRef, where('qrCode', '==', cleanQRCode));
+            const querySnapshot2 = await getDocs(q2);
+            
+            if (!querySnapshot2.empty) {
+              console.log('✅ [validateRegistration] Encontrado por qrCode');
+              docRef = querySnapshot2.docs[0].ref;
+              docSnap = querySnapshot2.docs[0];
+            } else {
+              // Búsqueda exhaustiva: buscar en todos los documentos
+              console.log('🔍 [validateRegistration] Búsqueda indexada falló, buscando en todos los documentos...');
+              const allDocs = await getDocs(registrationsRef);
+              
+              let foundDoc: any = null;
+              for (const docItem of allDocs.docs) {
+                const docData = docItem.data();
+                const docId = docItem.id;
+                
+                // Verificar si el QR coincide con:
+                // 1. ID del documento
+                // 2. qrCodeValue
+                // 3. qrCode
+                // 4. email (por si el QR contiene el email)
+                // 5. Parte del qrCodeDataUrl
+                if (
+                  docId === cleanQRCode ||
+                  docData.qrCodeValue === cleanQRCode ||
+                  docData.qrCode === cleanQRCode ||
+                  docData.email === cleanQRCode ||
+                  (docData.qrCodeDataUrl && String(docData.qrCodeDataUrl).includes(cleanQRCode))
+                ) {
+                  foundDoc = { ref: docItem.ref, snap: docItem };
+                  console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva');
+                  break;
+                }
+              }
+              
+              if (foundDoc) {
+                docRef = foundDoc.ref;
+                docSnap = foundDoc.snap;
+              } else {
+                console.error('❌ [validateRegistration] Código QR no encontrado:', cleanQRCode);
+                console.log('📋 [validateRegistration] Total de documentos en la colección:', allDocs.size);
+                notificationService.notify('error', 'Código Inválido', `El código "${cleanQRCode.substring(0, 20)}..." no existe en la base de datos.`);
+                return { success: false, message: `Código QR no encontrado en la base de datos. Código escaneado: ${cleanQRCode.substring(0, 30)}...` };
+              }
+            }
           }
         }
-      } catch (error) {
-        // Si falla, buscar por qrCodeValue o qrCode
-        const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
-        const querySnapshot = await getDocs(q);
-        
-        if (querySnapshot.empty) {
-          const q2 = query(registrationsRef, where('qrCode', '==', qrCode));
-          const querySnapshot2 = await getDocs(q2);
-          
-          if (querySnapshot2.empty) {
-            notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
-            return { success: false, message: 'Código QR no encontrado en la base de datos.' };
-          }
-          
-          docRef = querySnapshot2.docs[0].ref;
-          docSnap = querySnapshot2.docs[0];
-        } else {
-          docRef = querySnapshot.docs[0].ref;
-          docSnap = querySnapshot.docs[0];
-        }
+      } catch (error: any) {
+        console.error('❌ [validateRegistration] Error en búsqueda:', error);
+        notificationService.notify('error', 'Error de Búsqueda', `Error al buscar el código: ${error.message}`);
+        return { success: false, message: `Error al buscar el código QR: ${error.message}` };
       }
 
       // Usar transacción para garantizar consistencia
