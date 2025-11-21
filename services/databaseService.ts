@@ -43,16 +43,46 @@ const mapFirestoreToRegistration = (docData: DocumentData, docId: string): Regis
     data.lastName || 
     '';
   
+  // Determinar ticketType con lógica flexible
+  let ticketType: 'VIP' | 'GENERAL' | 'PROMO' = 'GENERAL';
+  if (data.ticketType) {
+    const type = String(data.ticketType).toUpperCase();
+    if (type === 'VIP' || type === 'PROMO') {
+      ticketType = type as 'VIP' | 'PROMO';
+    } else {
+      ticketType = 'GENERAL';
+    }
+  } else {
+    // Si no existe ticketType, asignar GENERAL por defecto
+    ticketType = 'GENERAL';
+  }
+  
+  // Determinar status con lógica flexible
+  let status: RegistrationStatus = RegistrationStatus.PENDING;
+  if (data.status) {
+    const statusStr = String(data.status).toUpperCase();
+    if (statusStr === 'VALIDATED' || statusStr === 'CANCELLED') {
+      status = statusStr as RegistrationStatus;
+    } else {
+      status = RegistrationStatus.PENDING;
+    }
+  } else {
+    // Si no existe status, asumir PENDING (no validado aún)
+    status = RegistrationStatus.PENDING;
+  }
+  
+  // Determinar qrCodeValue - usar ID del documento si no existe campo específico
+  const qrCodeValue = data.qrCodeValue || data.qrCode || data.qrCodeDataUrl?.substring(0, 50) || docId;
+  
   return {
     id: docId,
     name: fullName,
     email: data.email || '',
-    ticketType: data.ticketType || 'GENERAL',
-    status: (data.status as RegistrationStatus) || RegistrationStatus.PENDING,
+    ticketType,
+    status,
     validationTime: data.validationTime?.toDate?.()?.toISOString() || data.validationTime || undefined,
     validatedBy: data.validatedBy || undefined,
-    // El qrCodeValue puede ser el ID del documento o un campo específico
-    qrCodeValue: data.qrCodeValue || data.qrCode || docId || ''
+    qrCodeValue
   };
 };
 
@@ -158,25 +188,42 @@ export const dbService = {
           const querySnapshot = await getDocs(q);
           
           if (querySnapshot.empty) {
-            notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
-            return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+            // Intentar buscar por qrCode (campo alternativo)
+            const q2 = query(registrationsRef, where('qrCode', '==', qrCode));
+            const querySnapshot2 = await getDocs(q2);
+            
+            if (querySnapshot2.empty) {
+              notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
+              return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+            }
+            
+            docRef = querySnapshot2.docs[0].ref;
+            docSnap = querySnapshot2.docs[0];
+          } else {
+            docRef = querySnapshot.docs[0].ref;
+            docSnap = querySnapshot.docs[0];
           }
-          
-          docRef = querySnapshot.docs[0].ref;
-          docSnap = querySnapshot.docs[0];
         }
       } catch (error) {
-        // Si falla, buscar por qrCodeValue
+        // Si falla, buscar por qrCodeValue o qrCode
         const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
         const querySnapshot = await getDocs(q);
         
         if (querySnapshot.empty) {
-          notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
-          return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+          const q2 = query(registrationsRef, where('qrCode', '==', qrCode));
+          const querySnapshot2 = await getDocs(q2);
+          
+          if (querySnapshot2.empty) {
+            notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
+            return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+          }
+          
+          docRef = querySnapshot2.docs[0].ref;
+          docSnap = querySnapshot2.docs[0];
+        } else {
+          docRef = querySnapshot.docs[0].ref;
+          docSnap = querySnapshot.docs[0];
         }
-        
-        docRef = querySnapshot.docs[0].ref;
-        docSnap = querySnapshot.docs[0];
       }
 
       // Usar transacción para garantizar consistencia
@@ -188,7 +235,15 @@ export const dbService = {
         }
 
         const data = docSnap.data();
-        const currentStatus = data.status as RegistrationStatus;
+        
+        // Obtener status con valores por defecto si no existe
+        let currentStatus: RegistrationStatus = RegistrationStatus.PENDING;
+        if (data.status) {
+          const statusStr = String(data.status).toUpperCase();
+          if (statusStr === 'VALIDATED' || statusStr === 'CANCELLED') {
+            currentStatus = statusStr as RegistrationStatus;
+          }
+        }
 
         // Verificar si ya está validado
         if (currentStatus === RegistrationStatus.VALIDATED) {
@@ -218,17 +273,30 @@ export const dbService = {
         }
 
         // Actualizar el documento con la validación
-        const updateData = {
+        // También agregar ticketType si no existe (por defecto GENERAL)
+        const existingTicketType = data.ticketType || 'GENERAL';
+        const updateData: any = {
           status: RegistrationStatus.VALIDATED,
           validationTime: Timestamp.now(),
           validatedBy: operatorName
         };
+        
+        // Solo agregar ticketType si no existe
+        if (!data.ticketType) {
+          updateData.ticketType = 'GENERAL';
+        }
+        
+        // Agregar qrCodeValue si no existe (usar ID del documento)
+        if (!data.qrCodeValue && !data.qrCode) {
+          updateData.qrCodeValue = docSnap.id;
+        }
 
         transaction.update(docRef, updateData);
 
-        // Construir el registro actualizado
+        // Construir el registro actualizado con los datos actualizados
+        const updatedData = { ...data, ...updateData };
         const updatedRecord: Registration = {
-          ...mapFirestoreToRegistration(data, docSnap.id),
+          ...mapFirestoreToRegistration(updatedData, docSnap.id),
           status: RegistrationStatus.VALIDATED,
           validationTime: new Date().toISOString(),
           validatedBy: operatorName
