@@ -9,6 +9,7 @@ import { userService } from './services/userService';
 import { analyzeAttendance } from './services/geminiService';
 import Scanner from './components/Scanner';
 import { StatsCard } from './components/StatsCard';
+import { DiagnosticPanel } from './components/DiagnosticPanel';
 
 // Icons
 const QRIcon = () => <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 3.75 9.375v-4.5ZM3.75 14.625c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5a1.125 1.125 0 0 1-1.125-1.125v-4.5ZM13.5 4.875c0-.621.504-1.125 1.125-1.125h4.5c.621 0 1.125.504 1.125 1.125v4.5c0 .621-.504 1.125-1.125 1.125h-4.5A1.125 1.125 0 0 1 13.5 9.375v-4.5Z" /><path strokeLinecap="round" strokeLinejoin="round" d="M6.75 6.75h.75v.75h-.75v-.75ZM6.75 16.5h.75v.75h-.75v-.75ZM16.5 6.75h.75v.75h-.75v-.75ZM13.5 13.5h.75v.75h-.75v-.75ZM13.5 19.5h.75v.75h-.75v-.75ZM19.5 13.5h.75v.75h-.75v-.75ZM19.5 19.5h.75v.75h-.75v-.75ZM16.5 16.5h.75v.75h-.75v-.75Z" /></svg>;
@@ -895,6 +896,10 @@ function AppContent() {
                 {currentUser.role === UserRole.ADMIN && (
                   <Route path="/admin" element={<AdminPanel currentUser={currentUser} />} />
                 )}
+                {/* Panel de diagnóstico solo para ADMIN */}
+                {currentUser.role === UserRole.ADMIN && (
+                  <Route path="/diagnostic" element={<DiagnosticPanel />} />
+                )}
                 {/* Redirigir STAFF desde rutas no permitidas */}
                 {currentUser.role === UserRole.STAFF && (
                   <Route path="*" element={<ValidationView user={currentUser} />} />
@@ -903,7 +908,7 @@ function AppContent() {
             </div>
 
             {/* Bottom Navigation - Static */}
-            <nav className="shrink-0 h-20 bg-gray-900/95 backdrop-blur border-t border-gray-800 flex justify-around items-center z-30 pb-2 px-2">
+            <nav className={`shrink-0 bg-gray-900/95 backdrop-blur border-t border-gray-800 flex ${currentUser.role === UserRole.STAFF ? 'justify-center' : 'justify-around'} items-center z-30 pb-2 px-2 ${currentUser.role === UserRole.ADMIN ? 'h-24' : 'h-20'}`}>
               {/* Para STAFF: solo mostrar botón de escaneo centrado */}
               {currentUser.role === UserRole.STAFF ? (
                 <div className="w-full flex justify-center">
@@ -918,27 +923,35 @@ function AppContent() {
                 </div>
               ) : (
                 <>
-                  {/* Para ADMIN: navegación completa */}
-                  <NavLink 
-                    to="/" 
-                    active={location.pathname === '/'} 
-                    icon={<HomeIcon />} 
-                    label="Inicio" 
-                  />
-                  <div className="relative -top-6">
-                    <Link to="/validate" className={`flex items-center justify-center w-16 h-16 rounded-full shadow-lg border-4 border-gray-900 transition-all duration-300
-                      ${location.pathname === '/validate' 
-                        ? 'bg-white text-brand-600 shadow-brand-500/50 scale-110' 
-                        : 'bg-brand-600 text-white shadow-brand-500/30 hover:scale-105'}`}>
-                      <QRIcon />
-                    </Link>
+                  {/* Para ADMIN: navegación completa con scroll horizontal si es necesario */}
+                  <div className="flex items-center gap-2 w-full justify-around overflow-x-auto">
+                    <NavLink 
+                      to="/" 
+                      active={location.pathname === '/'} 
+                      icon={<HomeIcon />} 
+                      label="Inicio" 
+                    />
+                    <div className="relative -top-6">
+                      <Link to="/validate" className={`flex items-center justify-center w-16 h-16 rounded-full shadow-lg border-4 border-gray-900 transition-all duration-300
+                        ${location.pathname === '/validate' 
+                          ? 'bg-white text-brand-600 shadow-brand-500/50 scale-110' 
+                          : 'bg-brand-600 text-white shadow-brand-500/30 hover:scale-105'}`}>
+                        <QRIcon />
+                      </Link>
+                    </div>
+                    <NavLink 
+                      to="/admin" 
+                      active={location.pathname === '/admin'} 
+                      icon={<AdminIcon />} 
+                      label="Admin" 
+                    />
+                    <NavLink 
+                      to="/diagnostic" 
+                      active={location.pathname === '/diagnostic'} 
+                      icon={<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.301 24.301 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23-.693L5 14.5m14.8.8l1.57.393A9.065 9.065 0 0021.75 12c0-5.385-4.365-9.75-9.75-9.75S2.25 6.615 2.25 12a9.065 9.065 0 006.23 2.907L5 14.5m14.8.8V21M5 14.5V21m14.8-6.5h-2.25m-13.5 0H3" /></svg>} 
+                      label="Diagnóstico" 
+                    />
                   </div>
-                  <NavLink 
-                    to="/admin" 
-                    active={location.pathname === '/admin'} 
-                    icon={<AdminIcon />} 
-                    label="Admin" 
-                  />
                 </>
               )}
             </nav>
