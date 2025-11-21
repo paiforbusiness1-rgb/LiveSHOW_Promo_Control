@@ -1,0 +1,7 @@
+{
+  "name": "LiveSHOW PromoControl",
+  "description": "Event access control and promotion validation system with AI-powered insights.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}

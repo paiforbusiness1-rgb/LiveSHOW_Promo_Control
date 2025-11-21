@@ -1,0 +1,380 @@
+import { Registration, RegistrationStatus } from '../types';
+import { notificationService } from './notificationService';
+import { getDb } from './firebaseConfig';
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  where,
+  updateDoc,
+  runTransaction,
+  onSnapshot,
+  Timestamp,
+  QuerySnapshot,
+  DocumentData
+} from 'firebase/firestore';
+
+// Helper function para obtener db de forma segura
+const getFirestoreDb = () => {
+  const dbInstance = getDb();
+  if (!dbInstance) {
+    console.warn('⚠️ [databaseService] Firestore no disponible');
+  }
+  return dbInstance;
+};
+
+/**
+ * FIREBASE FIRESTORE SERVICE
+ * Persistencia real con Firestore para control de acceso
+ */
+
+const REGISTRATIONS_COLLECTION = 'registrations';
+
+// Mapear datos de Firestore a Registration
+const mapFirestoreToRegistration = (docData: DocumentData, docId: string): Registration => {
+  const data = docData;
+  
+  // Construir el nombre completo si solo hay firstName y lastName
+  const fullName = data.name || 
+    (data.firstName && data.lastName ? `${data.firstName} ${data.lastName}`.trim() : '') ||
+    data.firstName || 
+    data.lastName || 
+    '';
+  
+  return {
+    id: docId,
+    name: fullName,
+    email: data.email || '',
+    ticketType: data.ticketType || 'GENERAL',
+    status: (data.status as RegistrationStatus) || RegistrationStatus.PENDING,
+    validationTime: data.validationTime?.toDate?.()?.toISOString() || data.validationTime || undefined,
+    validatedBy: data.validatedBy || undefined,
+    // El qrCodeValue puede ser el ID del documento o un campo específico
+    qrCodeValue: data.qrCodeValue || data.qrCode || docId || ''
+  };
+};
+
+// Mapear Registration a formato Firestore
+const mapRegistrationToFirestore = (registration: Partial<Registration>) => {
+  const data: any = {
+    name: registration.name,
+    email: registration.email,
+    ticketType: registration.ticketType,
+    status: registration.status,
+    qrCodeValue: registration.qrCodeValue
+  };
+
+  if (registration.validationTime) {
+    data.validationTime = Timestamp.fromDate(new Date(registration.validationTime));
+  }
+
+  if (registration.validatedBy) {
+    data.validatedBy = registration.validatedBy;
+  }
+
+  return data;
+};
+
+let realtimeUnsubscribe: (() => void) | null = null;
+
+export const dbService = {
+  /**
+   * Inicializar el servicio
+   */
+  init: () => {
+    const dbInstance = getFirestoreDb();
+    if (!dbInstance) {
+      console.warn('⚠️ [dbService] Firebase no está configurado - Modo DEMO activado');
+      return;
+    }
+    console.log('✅ [dbService] Firestore inicializado');
+  },
+
+  /**
+   * Obtener todos los registros
+   */
+  getAllRegistrations: async (): Promise<Registration[]> => {
+    try {
+      const dbInstance = getFirestoreDb();
+      
+      if (!dbInstance) {
+        console.warn('⚠️ [getAllRegistrations] Firebase no configurado - Modo DEMO');
+        notificationService.notify('warning', 'Modo DEMO', 'Firebase no está configurado. Los datos son de demostración.');
+        return [];
+      }
+      
+      console.log('🔄 [getAllRegistrations] Creando referencia a colección:', REGISTRATIONS_COLLECTION);
+      const registrationsRef = collection(dbInstance, REGISTRATIONS_COLLECTION);
+      console.log('✅ [getAllRegistrations] Referencia creada:', registrationsRef);
+      
+      console.log('🔄 [getAllRegistrations] Obteniendo documentos...');
+      const snapshot = await getDocs(registrationsRef);
+      console.log('✅ [getAllRegistrations] Documentos obtenidos:', snapshot.size);
+      
+      return snapshot.docs.map(doc => 
+        mapFirestoreToRegistration(doc.data(), doc.id)
+      );
+    } catch (error) {
+      console.error('Error obteniendo registros:', error);
+      notificationService.notify('error', 'Error de Conexión', 'No se pudieron cargar los registros.');
+      return [];
+    }
+  },
+
+  /**
+   * Validar un registro usando transacción para evitar duplicados
+   * Esta es la función crítica que garantiza consistencia
+   */
+  validateRegistration: async (
+    qrCode: string, 
+    operatorName: string
+  ): Promise<{ success: boolean; message: string; registration?: Registration }> => {
+    const dbInstance = getFirestoreDb();
+    
+    if (!dbInstance) {
+      notificationService.notify('warning', 'Modo DEMO', 'Firebase no está configurado. La validación es simulada.');
+      // Simular validación en modo demo
+      return {
+        success: false,
+        message: 'Modo DEMO: Configura Firebase para validaciones reales.'
+      };
+    }
+    
+    try {
+      const registrationsRef = collection(dbInstance, REGISTRATIONS_COLLECTION);
+      let docRef: any;
+      let docSnap: any;
+      
+      // Intentar buscar por ID del documento primero (si el QR contiene el ID)
+      try {
+        docRef = doc(dbInstance, REGISTRATIONS_COLLECTION, qrCode);
+        docSnap = await getDoc(docRef);
+        
+        if (!docSnap.exists()) {
+          // Si no existe por ID, buscar por qrCodeValue
+          const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
+          const querySnapshot = await getDocs(q);
+          
+          if (querySnapshot.empty) {
+            notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
+            return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+          }
+          
+          docRef = querySnapshot.docs[0].ref;
+          docSnap = querySnapshot.docs[0];
+        }
+      } catch (error) {
+        // Si falla, buscar por qrCodeValue
+        const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
+        const querySnapshot = await getDocs(q);
+        
+        if (querySnapshot.empty) {
+          notificationService.notify('error', 'Código Inválido', `El código escaneado no existe.`);
+          return { success: false, message: 'Código QR no encontrado en la base de datos.' };
+        }
+        
+        docRef = querySnapshot.docs[0].ref;
+        docSnap = querySnapshot.docs[0];
+      }
+
+      // Usar transacción para garantizar consistencia
+      const result = await runTransaction(dbInstance, async (transaction) => {
+        const docSnap = await transaction.get(docRef);
+
+        if (!docSnap.exists()) {
+          throw new Error('Documento no encontrado');
+        }
+
+        const data = docSnap.data();
+        const currentStatus = data.status as RegistrationStatus;
+
+        // Verificar si ya está validado
+        if (currentStatus === RegistrationStatus.VALIDATED) {
+          const existingRecord = mapFirestoreToRegistration(data, docSnap.id);
+          notificationService.notify(
+            'warning', 
+            'Ya Validado', 
+            `${existingRecord.name} ya ingresó a las ${new Date(existingRecord.validationTime || '').toLocaleTimeString()}`
+          );
+          
+          return {
+            success: false,
+            message: `¡Atención! Código ya validado por ${data.validatedBy || 'Desconocido'} a las ${new Date(data.validationTime?.toDate?.() || data.validationTime || '').toLocaleTimeString()}.`,
+            registration: existingRecord
+          };
+        }
+
+        // Verificar si está cancelado
+        if (currentStatus === RegistrationStatus.CANCELLED) {
+          const cancelledRecord = mapFirestoreToRegistration(data, docSnap.id);
+          notificationService.notify('error', 'Acceso Denegado', `Ticket CANCELADO: ${cancelledRecord.name}`);
+          return {
+            success: false,
+            message: 'REGISTRO CANCELADO.',
+            registration: cancelledRecord
+          };
+        }
+
+        // Actualizar el documento con la validación
+        const updateData = {
+          status: RegistrationStatus.VALIDATED,
+          validationTime: Timestamp.now(),
+          validatedBy: operatorName
+        };
+
+        transaction.update(docRef, updateData);
+
+        // Construir el registro actualizado
+        const updatedRecord: Registration = {
+          ...mapFirestoreToRegistration(data, docSnap.id),
+          status: RegistrationStatus.VALIDATED,
+          validationTime: new Date().toISOString(),
+          validatedBy: operatorName
+        };
+
+        // Notificaciones de éxito
+        if (updatedRecord.ticketType === 'VIP') {
+          notificationService.notify('success', '¡Acceso VIP!', `${updatedRecord.name} ha ingresado. Notificar a hostess.`);
+        } else if (updatedRecord.ticketType === 'PROMO') {
+          notificationService.notify('info', 'Kit Promo', `Entregar kit a ${updatedRecord.name}.`);
+        }
+
+        return {
+          success: true,
+          message: 'Validación exitosa.',
+          registration: updatedRecord
+        };
+      });
+
+      return result;
+    } catch (error: any) {
+      console.error('Error validando registro:', error);
+      
+      // Si es un error de transacción (probablemente conflicto)
+      if (error.code === 'failed-precondition' || error.message?.includes('concurrent')) {
+        notificationService.notify('error', 'Conflicto', 'Otro operador está validando este código. Intenta de nuevo.');
+        return { 
+          success: false, 
+          message: 'Error de concurrencia. Otro operador puede estar validando este código simultáneamente.' 
+        };
+      }
+
+      notificationService.notify('error', 'Error de Validación', 'No se pudo validar el código. Verifica tu conexión.');
+      return { 
+        success: false, 
+        message: 'Error al validar el código. Por favor, intenta de nuevo.' 
+      };
+    }
+  },
+
+  /**
+   * Suscribirse a cambios en tiempo real
+   * Útil para actualizar el dashboard automáticamente
+   */
+  subscribeToRegistrations: (
+    callback: (registrations: Registration[]) => void
+  ): (() => void) => {
+    const dbInstance = getFirestoreDb();
+    
+    if (!dbInstance) {
+      console.warn('⚠️ [subscribeToRegistrations] Firebase no configurado - Modo DEMO');
+      callback([]);
+      return () => {}; // Retornar función vacía para unsubscribe
+    }
+    
+    const registrationsRef = collection(dbInstance, REGISTRATIONS_COLLECTION);
+    
+    const unsubscribe = onSnapshot(
+      registrationsRef,
+      (snapshot: QuerySnapshot<DocumentData>) => {
+        const registrations = snapshot.docs.map(doc => 
+          mapFirestoreToRegistration(doc.data(), doc.id)
+        );
+        callback(registrations);
+      },
+      (error) => {
+        console.error('Error en suscripción en tiempo real:', error);
+        notificationService.notify('error', 'Error de Sincronización', 'No se pueden recibir actualizaciones en tiempo real.');
+      }
+    );
+
+    return unsubscribe;
+  },
+
+  /**
+   * Suscribirse solo a validaciones recientes (para dashboard)
+   */
+  subscribeToRecentValidations: (
+    callback: (registrations: Registration[]) => void,
+    limit: number = 10
+  ): (() => void) => {
+    const dbInstance = getFirestoreDb();
+    
+    if (!dbInstance) {
+      console.warn('⚠️ [subscribeToRecentValidations] Firebase no configurado - Modo DEMO');
+      callback([]);
+      return () => {}; // Retornar función vacía para unsubscribe
+    }
+    
+    const registrationsRef = collection(dbInstance, REGISTRATIONS_COLLECTION);
+    const q = query(
+      registrationsRef,
+      where('status', '==', RegistrationStatus.VALIDATED)
+      // Nota: Firestore no permite orderBy con where en diferentes campos fácilmente
+      // Para ordenar por fecha, necesitarías un índice compuesto
+    );
+
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot: QuerySnapshot<DocumentData>) => {
+        const registrations = snapshot.docs
+          .map(doc => mapFirestoreToRegistration(doc.data(), doc.id))
+          .sort((a, b) => {
+            const timeA = new Date(a.validationTime || 0).getTime();
+            const timeB = new Date(b.validationTime || 0).getTime();
+            return timeB - timeA; // Más recientes primero
+          })
+          .slice(0, limit);
+        callback(registrations);
+      },
+      (error) => {
+        console.error('Error en suscripción de validaciones:', error);
+      }
+    );
+
+    return unsubscribe;
+  },
+
+  /**
+   * Obtener un registro específico por QR code
+   */
+  getRegistrationByQR: async (qrCode: string): Promise<Registration | null> => {
+    const dbInstance = getFirestoreDb();
+    
+    if (!dbInstance) {
+      console.warn('⚠️ [getRegistrationByQR] Firebase no configurado - Modo DEMO');
+      return null;
+    }
+    
+    try {
+      const registrationsRef = collection(dbInstance, REGISTRATIONS_COLLECTION);
+      const q = query(registrationsRef, where('qrCodeValue', '==', qrCode));
+      const querySnapshot = await getDocs(q);
+
+      if (querySnapshot.empty) {
+        return null;
+      }
+
+      const doc = querySnapshot.docs[0];
+      return mapFirestoreToRegistration(doc.data(), doc.id);
+    } catch (error) {
+      console.error('Error obteniendo registro por QR:', error);
+      return null;
+    }
+  }
+};
+
+// Mantener compatibilidad con el código existente
+export const db = dbService;
