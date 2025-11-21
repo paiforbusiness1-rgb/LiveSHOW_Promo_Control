@@ -226,55 +226,56 @@ export const dbService = {
                 docRef = querySnapshot3.docs[0].ref;
                 docSnap = querySnapshot3.docs[0];
               } else {
-              // Búsqueda exhaustiva: buscar en todos los documentos
-              console.log('🔍 [validateRegistration] Búsqueda indexada falló, buscando en todos los documentos...');
-              const allDocs = await getDocs(registrationsRef);
-              
-              let foundDoc: any = null;
-              for (const docItem of allDocs.docs) {
-                const docData = docItem.data();
-                const docId = docItem.id;
+                // Búsqueda exhaustiva: buscar en todos los documentos
+                console.log('🔍 [validateRegistration] Búsqueda indexada falló, buscando en todos los documentos...');
+                const allDocs = await getDocs(registrationsRef);
                 
-                // Verificar si el QR coincide con:
-                // 1. ID del documento
-                // 2. qrCodeValue
-                // 3. qrCode
-                // 4. email (MUY IMPORTANTE: el QR contiene el email)
-                // 5. email en minúsculas (comparación case-insensitive)
-                // 6. Parte del qrCodeDataUrl
-                // 7. Contenido completo del QR (por si el documento tiene el texto completo)
-                const docEmail = String(docData.email || '').toLowerCase().trim();
-                const searchValue = cleanQRCode.toLowerCase().trim();
-                
-                if (
-                  docId === cleanQRCode ||
-                  docData.qrCodeValue === cleanQRCode ||
-                  docData.qrCode === cleanQRCode ||
-                  docEmail === searchValue ||
-                  docData.email === cleanQRCode ||
-                  (docData.qrCodeDataUrl && String(docData.qrCodeDataUrl).includes(cleanQRCode)) ||
-                  (docData.qrContent && String(docData.qrContent).includes(cleanQRCode))
-                ) {
-                  foundDoc = { ref: docItem.ref, snap: docItem };
-                  console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva por:', 
-                    docId === cleanQRCode ? 'ID' :
-                    docData.qrCodeValue === cleanQRCode ? 'qrCodeValue' :
-                    docData.qrCode === cleanQRCode ? 'qrCode' :
-                    docEmail === searchValue || docData.email === cleanQRCode ? 'email' :
-                    'otro campo'
-                  );
-                  break;
+                let foundDoc: any = null;
+                for (const docItem of allDocs.docs) {
+                  const docData = docItem.data();
+                  const docId = docItem.id;
+                  
+                  // Verificar si el QR coincide con:
+                  // 1. ID del documento
+                  // 2. qrCodeValue
+                  // 3. qrCode
+                  // 4. email (MUY IMPORTANTE: el QR contiene el email)
+                  // 5. email en minúsculas (comparación case-insensitive)
+                  // 6. Parte del qrCodeDataUrl
+                  // 7. Contenido completo del QR (por si el documento tiene el texto completo)
+                  const docEmail = String(docData.email || '').toLowerCase().trim();
+                  const searchValue = cleanQRCode.toLowerCase().trim();
+                  
+                  if (
+                    docId === cleanQRCode ||
+                    docData.qrCodeValue === cleanQRCode ||
+                    docData.qrCode === cleanQRCode ||
+                    docEmail === searchValue ||
+                    docData.email === cleanQRCode ||
+                    (docData.qrCodeDataUrl && String(docData.qrCodeDataUrl).includes(cleanQRCode)) ||
+                    (docData.qrContent && String(docData.qrContent).includes(cleanQRCode))
+                  ) {
+                    foundDoc = { ref: docItem.ref, snap: docItem };
+                    console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva por:', 
+                      docId === cleanQRCode ? 'ID' :
+                      docData.qrCodeValue === cleanQRCode ? 'qrCodeValue' :
+                      docData.qrCode === cleanQRCode ? 'qrCode' :
+                      docEmail === searchValue || docData.email === cleanQRCode ? 'email' :
+                      'otro campo'
+                    );
+                    break;
+                  }
                 }
-              }
-              
-              if (foundDoc) {
-                docRef = foundDoc.ref;
-                docSnap = foundDoc.snap;
-              } else {
-                console.error('❌ [validateRegistration] Código QR no encontrado:', cleanQRCode);
-                console.log('📋 [validateRegistration] Total de documentos en la colección:', allDocs.size);
-                notificationService.notify('error', 'Código Inválido', `El código "${cleanQRCode.substring(0, 20)}..." no existe en la base de datos.`);
-                return { success: false, message: `Código QR no encontrado en la base de datos. Código escaneado: ${cleanQRCode.substring(0, 30)}...` };
+                
+                if (foundDoc) {
+                  docRef = foundDoc.ref;
+                  docSnap = foundDoc.snap;
+                } else {
+                  console.error('❌ [validateRegistration] Código QR no encontrado:', cleanQRCode);
+                  console.log('📋 [validateRegistration] Total de documentos en la colección:', allDocs.size);
+                  notificationService.notify('error', 'Código Inválido', `El código "${cleanQRCode.substring(0, 20)}..." no existe en la base de datos.`);
+                  return { success: false, message: `Código QR no encontrado en la base de datos. Código escaneado: ${cleanQRCode.substring(0, 30)}...` };
+                }
               }
             }
           }
