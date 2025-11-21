@@ -217,6 +217,15 @@ export const dbService = {
               docRef = querySnapshot2.docs[0].ref;
               docSnap = querySnapshot2.docs[0];
             } else {
+              // Buscar por email (muy importante: el QR contiene el email)
+              const q3 = query(registrationsRef, where('email', '==', cleanQRCode));
+              const querySnapshot3 = await getDocs(q3);
+              
+              if (!querySnapshot3.empty) {
+                console.log('✅ [validateRegistration] Encontrado por email');
+                docRef = querySnapshot3.docs[0].ref;
+                docSnap = querySnapshot3.docs[0];
+              } else {
               // Búsqueda exhaustiva: buscar en todos los documentos
               console.log('🔍 [validateRegistration] Búsqueda indexada falló, buscando en todos los documentos...');
               const allDocs = await getDocs(registrationsRef);
@@ -272,8 +281,43 @@ export const dbService = {
         }
       } catch (error: any) {
         console.error('❌ [validateRegistration] Error en búsqueda:', error);
-        notificationService.notify('error', 'Error de Búsqueda', `Error al buscar el código: ${error.message}`);
-        return { success: false, message: `Error al buscar el código QR: ${error.message}` };
+        
+        // Si falla la búsqueda indexada, intentar búsqueda exhaustiva como último recurso
+        try {
+          console.log('🔄 [validateRegistration] Intentando búsqueda exhaustiva como último recurso...');
+          const allDocs = await getDocs(registrationsRef);
+          
+          let foundDoc: any = null;
+          for (const docItem of allDocs.docs) {
+            const docData = docItem.data();
+            const docId = docItem.id;
+            const docEmail = String(docData.email || '').toLowerCase().trim();
+            const searchValue = cleanQRCode.toLowerCase().trim();
+            
+            if (
+              docId === cleanQRCode ||
+              docData.qrCodeValue === cleanQRCode ||
+              docData.qrCode === cleanQRCode ||
+              docEmail === searchValue ||
+              docData.email === cleanQRCode
+            ) {
+              foundDoc = { ref: docItem.ref, snap: docItem };
+              console.log('✅ [validateRegistration] Encontrado en búsqueda exhaustiva de emergencia');
+              docRef = foundDoc.ref;
+              docSnap = foundDoc.snap;
+              break;
+            }
+          }
+          
+          if (!foundDoc) {
+            notificationService.notify('error', 'Error de Búsqueda', `Error al buscar el código: ${error.message}`);
+            return { success: false, message: `Error al buscar el código QR: ${error.message}` };
+          }
+        } catch (exhaustiveError: any) {
+          console.error('❌ [validateRegistration] Error en búsqueda exhaustiva:', exhaustiveError);
+          notificationService.notify('error', 'Error de Búsqueda', `Error al buscar el código: ${error.message}`);
+          return { success: false, message: `Error al buscar el código QR: ${error.message}` };
+        }
       }
 
       // Usar transacción para garantizar consistencia
